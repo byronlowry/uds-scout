@@ -1,9 +1,9 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { lookup } from "node:dns";
+import { lookup, type LookupAddress } from "node:dns";
 import { isIP, type LookupFunction } from "node:net";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import { githubContainerRegistryAuthorization } from "@/lib/github";
 import type { ParsedImageReference } from "@/lib/security-normalization";
 
@@ -78,14 +78,19 @@ const publicRegistryLookup: LookupFunction = (hostname, _options, callback) => {
       callback(new Error("Registry DNS resolved to a local or private address."), "", 4);
       return;
     }
+    // Node's connect calls lookup with { all: true } (autoSelectFamily) and expects every address.
+    if (_options?.all) {
+      (callback as unknown as (error: null, all: LookupAddress[]) => void)(null, addresses);
+      return;
+    }
     callback(null, addresses[0].address, addresses[0].family);
   });
 };
 const publicRegistryDispatcher = new Agent({ connect: { lookup: publicRegistryLookup } });
 
-type SecureFetchInit = RequestInit & { dispatcher: Agent };
 function publicRegistryFetch(input: string | URL, init: RequestInit) {
-  return fetch(input, { ...init, dispatcher: publicRegistryDispatcher } as SecureFetchInit);
+  // Use undici's own fetch: Node's built-in fetch bundles an older undici that rejects this Agent.
+  return undiciFetch(input, { ...init, dispatcher: publicRegistryDispatcher } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>;
 }
 
 function bearerChallenge(value: string | null) {
